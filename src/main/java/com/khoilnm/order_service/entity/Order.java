@@ -1,25 +1,24 @@
 package com.khoilnm.order_service.entity;
 
 
+import com.khoilnm.commoncore.entity.BaseEntity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
-import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
-import lombok.experimental.SuperBuilder;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
 
 @Entity
 @Table(name = "`order`", schema = "`order`")
 @Getter
 @Setter
-@SuperBuilder
+@Builder
+@AllArgsConstructor
 @NoArgsConstructor
-public class Order {
-
-    @Id
-    private String id;
+public class Order extends BaseEntity {
 
     @Column(name = "customer_id")
     private String customerId;
