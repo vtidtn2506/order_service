@@ -14,7 +14,18 @@ spring:
     hibernate:
       ddl-auto: none
     show-sql: true
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JacksonJsonSerializer
+
 
 services:
   product:
-    url: ${PRODUCT_SERVICE_URL:http://localhost:8081}
+    url: ${PRODUCT_SERVICE_URL:http://localhost:8079}
+    connect-timeout: ${PRODUCT_SERVICE_CONNECT_TIMEOUT:3s}
+    # Must be longer than product_service's worst case for deduct-stock
+    # (hikari.connection-timeout 2s + stock.lock-timeout 3s + queries), otherwise a timed-out
+    # request may still deduct stock after order_service gave up.
+    response-timeout: ${PRODUCT_SERVICE_RESPONSE_TIMEOUT:10s}
