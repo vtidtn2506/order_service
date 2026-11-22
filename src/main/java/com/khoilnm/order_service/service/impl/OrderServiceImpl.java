@@ -9,7 +9,6 @@ import com.khoilnm.commoncore.response.ResponseCode;
 import com.khoilnm.order_service.constant.OrderStatus;
 import com.khoilnm.order_service.dto.request.CreateOrderItemRequest;
 import com.khoilnm.order_service.dto.request.CreateOrderRequest;
-import com.khoilnm.order_service.dto.request.DeductStockRequest;
 import com.khoilnm.order_service.dto.response.OrderDetailResponse;
 import com.khoilnm.order_service.dto.response.OrderResponse;
 import com.khoilnm.order_service.entity.Order;
@@ -19,17 +18,21 @@ import com.khoilnm.order_service.repository.OrderItemRepository;
 import com.khoilnm.order_service.repository.OrderRepository;
 import com.khoilnm.order_service.service.OrderService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.List;
 import java.util.Map;
-import java.util.function.Function;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import static com.khoilnm.order_service.constant.OrderResponseCode.ORDER_NOT_FOUND;
+import static com.khoilnm.order_service.constant.OrderResponseCode.PRODUCT_NOT_FOUND;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class OrderServiceImpl implements OrderService {
@@ -38,6 +41,7 @@ public class OrderServiceImpl implements OrderService {
     private final OrderMapper orderMapper;
     private final ProductClient productClient;
     private final KafkaTemplate<String, Object> kafkaTemplate;
+    private final TransactionTemplate transactionTemplate;
 
     @Override
     @Transactional(readOnly = true)
@@ -53,13 +57,18 @@ public class OrderServiceImpl implements OrderService {
         return orderMapper.toDetailResponse(order, orderItemRepository.findAllByOrderId(id));
     }
 
+    /**
+     * 1. Read prices from product_service (HTTP, read-only)
+     * 2. Save order PENDING + items (one transaction)
+     * 3. After commit: publish "order-create" (product_service consumes it and deducts the stock)
+     * The response is returned right away with status PENDING; the stock is deducted later.
+     */
     @Override
     public OrderDetailResponse createOrder(CreateOrderRequest request) {
-        // 1. Called outside the DB transaction, so no connection is held while waiting for product_service
-        Map<String, ProductResponse> products = productClient.deductStock(toDeductStockRequest(request.getItems()))
-                .stream()
-                .collect(Collectors.toMap(ProductResponse::getId, Function.identity()));
+        // 1. Outside the DB transaction, so no connection is held during the HTTP call
+        Map<String, ProductResponse> products = getProducts(request.getItems());
 
+        // 2.
         Order order = Order.builder()
                 .customerId(request.getCustomerId())
                 .status(OrderStatus.PENDING.name())
@@ -78,12 +87,40 @@ public class OrderServiceImpl implements OrderService {
                 .mapToInt(item -> Math.multiplyExact(item.getPrice(), item.getQuantity()))
                 .reduce(0, Math::addExact));
 
-        Order savedOrder = orderRepository.save(order);
-        List<OrderItem> savedItems = orderItemRepository.saveAll(items);
-        // Sent to Kafka only after this transaction commits
-        OrderCreatedEvent event = toEvent(order, items);
-        kafkaTemplate.send(KafkaTopic.ORDER_CREATE, event.orderId(), event);
-        return orderMapper.toDetailResponse(savedOrder, savedItems);
+        OrderDetailResponse response = transactionTemplate.execute(status -> {
+            Order savedOrder = orderRepository.save(order);
+            List<OrderItem> savedItems = orderItemRepository.saveAll(items);
+            return orderMapper.toDetailResponse(savedOrder, savedItems);
+        });
+
+        // 3. The transaction is committed here: a rolled-back order is never published
+        publish(KafkaTopic.ORDER_CREATE, order.getId(), toEvent(order, items));
+        return response;
+    }
+
+    private Map<String, ProductResponse> getProducts(List<CreateOrderItemRequest> items) {
+        Set<String> productIds = items.stream()
+                .map(CreateOrderItemRequest::getProductId)
+                .collect(Collectors.toSet());
+
+        Map<String, ProductResponse> products = productClient.getProductsByIds(productIds);
+
+        List<String> missing = productIds.stream().filter(id -> !products.containsKey(id)).sorted().toList();
+        if (!missing.isEmpty()) {
+            throw businessException(PRODUCT_NOT_FOUND, "Product not found: " + String.join(", ", missing));
+        }
+        return products;
+    }
+
+    private void publish(String topic, String orderId, Object payload) {
+        kafkaTemplate.send(topic, orderId, payload).whenComplete((result, ex) -> {
+            if (ex != null) {
+                log.error("Failed to publish {} for order {}", topic, orderId, ex);
+            } else {
+                log.info("Published {} for order {} (partition={}, offset={})", topic, orderId,
+                        result.getRecordMetadata().partition(), result.getRecordMetadata().offset());
+            }
+        });
     }
 
     private static OrderCreatedEvent toEvent(Order order, List<OrderItem> items) {
@@ -98,12 +135,6 @@ public class OrderServiceImpl implements OrderService {
                         .toList(),
                 order.getCreatedDate(),
                 order.getCreatedBy());
-    }
-
-    private static DeductStockRequest toDeductStockRequest(List<CreateOrderItemRequest> items) {
-        return new DeductStockRequest(items.stream()
-                .map(item -> new DeductStockRequest.Item(item.getProductId(), item.getQuantity()))
-                .toList());
     }
 
     private static BusinessException businessException(ResponseCode code, String message) {

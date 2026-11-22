@@ -25,7 +25,5 @@ services:
   product:
     url: ${PRODUCT_SERVICE_URL:http://localhost:8079}
     connect-timeout: ${PRODUCT_SERVICE_CONNECT_TIMEOUT:3s}
-    # Must be longer than product_service's worst case for deduct-stock
-    # (hikari.connection-timeout 2s + stock.lock-timeout 3s + queries), otherwise a timed-out
-    # request may still deduct stock after order_service gave up.
+    # Only used to read product prices (stock is deducted through Kafka)
     response-timeout: ${PRODUCT_SERVICE_RESPONSE_TIMEOUT:10s}
