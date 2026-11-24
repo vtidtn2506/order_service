@@ -2,6 +2,7 @@ package com.khoilnm.order_service.service.impl;
 
 import com.khoilnm.order_service.constant.KafkaTopic;
 import com.khoilnm.order_service.dto.event.OrderCreatedEvent;
+import com.khoilnm.order_service.dto.event.StockDeductResultEvent;
 import com.khoilnm.order_service.thirdparty.ProductClient;
 import com.khoilnm.order_service.dto.response.ProductResponse;
 import com.khoilnm.commoncore.exception.BusinessException;
@@ -96,6 +97,29 @@ public class OrderServiceImpl implements OrderService {
         // 3. The transaction is committed here: a rolled-back order is never published
         publish(KafkaTopic.ORDER_CREATE, order.getId(), toEvent(order, items));
         return response;
+    }
+
+    @Override
+    @Transactional
+    public void applyStockDeductResult(StockDeductResultEvent result) {
+        Order order = orderRepository.findById(result.orderId()).orElse(null);
+        if (order == null) {
+            log.warn("Stock deduct result for unknown order {}, ignoring", result.orderId());
+            return;
+        }
+        // Idempotent: a redelivered result (or a late one) can't change a final status
+        if (!OrderStatus.PENDING.name().equals(order.getStatus())) {
+            log.info("Order {} is already {}, ignoring stock deduct result {}",
+                    order.getId(), order.getStatus(), result.status());
+            return;
+        }
+
+        OrderStatus newStatus = result.status() == StockDeductResultEvent.Status.SUCCESS
+                ? OrderStatus.CONFIRMED
+                : OrderStatus.FAILED;
+        order.setStatus(newStatus.name());
+        log.info("Order {}: PENDING -> {}{}", order.getId(), newStatus,
+                result.reason() == null ? "" : " (" + result.reason() + ")");
     }
 
     private Map<String, ProductResponse> getProducts(List<CreateOrderItemRequest> items) {

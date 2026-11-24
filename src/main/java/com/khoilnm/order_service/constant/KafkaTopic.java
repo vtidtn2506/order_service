@@ -7,6 +7,9 @@ public final class KafkaTopic {
      */
     public static final String ORDER_CREATE = "order-create";
 
+    /** Result of the stock deduction, published by product_service. Key = orderId. */
+    public static final String STOCK_DEDUCT_RESULT = "stock-deduct-result";
+
     private KafkaTopic() {
     }
 }
