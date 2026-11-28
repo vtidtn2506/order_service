@@ -2,6 +2,7 @@ package com.khoilnm.order_service.config;
 
 import io.netty.channel.ChannelOption;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.cloud.client.loadbalancer.LoadBalanced;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
@@ -14,14 +15,21 @@ import java.time.Duration;
 public class ProductClientConfig {
 
     @Bean
-    public WebClient productWebClient(@Value("${services.product.url}") String productServiceUrl,
+    @LoadBalanced
+    public WebClient.Builder loadBalancedWebClientBuilder() {
+        return WebClient.builder();
+    }
+
+    @Bean
+    public WebClient productWebClient(WebClient.Builder loadBalancedWebClientBuilder,
+                                      @Value("${services.product.url}") String productServiceUrl,
                                       @Value("${services.product.connect-timeout:3s}") Duration connectTimeout,
                                       @Value("${services.product.response-timeout:10s}") Duration responseTimeout) {
         HttpClient httpClient = HttpClient.create()
                 .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, (int) connectTimeout.toMillis())
                 .responseTimeout(responseTimeout);
 
-        return WebClient.builder()
+        return loadBalancedWebClientBuilder
                 .baseUrl(productServiceUrl)
                 .clientConnector(new ReactorClientHttpConnector(httpClient))
                 .build();

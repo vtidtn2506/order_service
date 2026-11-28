@@ -14,6 +14,5 @@ public interface OrderService {
 
     OrderDetailResponse createOrder(CreateOrderRequest request);
 
-    /** PENDING → CONFIRMED (stock deducted) or FAILED. Orders that are no longer PENDING are left untouched. */
     void applyStockDeductResult(StockDeductResultEvent result);
 }

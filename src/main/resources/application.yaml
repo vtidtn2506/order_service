@@ -3,7 +3,7 @@ server:
 
 spring:
   application:
-    name: order_service
+    name: order-service
   profiles:
     active: ${ACTIVE_PROFILE:local}
   datasource:
@@ -33,7 +33,15 @@ spring:
 
 services:
   product:
-    url: ${PRODUCT_SERVICE_URL:http://localhost:8079}
+    url: ${PRODUCT_SERVICE_URL:lb://product-service}
     connect-timeout: ${PRODUCT_SERVICE_CONNECT_TIMEOUT:3s}
     # Only used to read product prices (stock is deducted through Kafka)
     response-timeout: ${PRODUCT_SERVICE_RESPONSE_TIMEOUT:10s}
+
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_URL:http://localhost:8761/eureka/}
+  instance:
+    # Register the IP instead of the machine hostname (the hostname may not resolve from other services)
+    prefer-ip-address: true

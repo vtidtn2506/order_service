@@ -23,8 +23,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionTemplate;
-
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -42,7 +40,6 @@ public class OrderServiceImpl implements OrderService {
     private final OrderMapper orderMapper;
     private final ProductClient productClient;
     private final KafkaTemplate<String, Object> kafkaTemplate;
-    private final TransactionTemplate transactionTemplate;
 
     @Override
     @Transactional(readOnly = true)
@@ -58,12 +55,7 @@ public class OrderServiceImpl implements OrderService {
         return orderMapper.toDetailResponse(order, orderItemRepository.findAllByOrderId(id));
     }
 
-    /**
-     * 1. Read prices from product_service (HTTP, read-only)
-     * 2. Save order PENDING + items (one transaction)
-     * 3. After commit: publish "order-create" (product_service consumes it and deducts the stock)
-     * The response is returned right away with status PENDING; the stock is deducted later.
-     */
+    @Transactional
     @Override
     public OrderDetailResponse createOrder(CreateOrderRequest request) {
         // 1. Outside the DB transaction, so no connection is held during the HTTP call
@@ -88,15 +80,14 @@ public class OrderServiceImpl implements OrderService {
                 .mapToInt(item -> Math.multiplyExact(item.getPrice(), item.getQuantity()))
                 .reduce(0, Math::addExact));
 
-        OrderDetailResponse response = transactionTemplate.execute(status -> {
-            Order savedOrder = orderRepository.save(order);
-            List<OrderItem> savedItems = orderItemRepository.saveAll(items);
-            return orderMapper.toDetailResponse(savedOrder, savedItems);
-        });
+        Order savedOrder = orderRepository.save(order);
+        List<OrderItem> savedItems = orderItemRepository.saveAll(items);
+
 
         // 3. The transaction is committed here: a rolled-back order is never published
         publish(KafkaTopic.ORDER_CREATE, order.getId(), toEvent(order, items));
-        return response;
+
+        return orderMapper.toDetailResponse(savedOrder, savedItems);
     }
 
     @Override
